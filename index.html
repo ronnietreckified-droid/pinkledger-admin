@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PinkLedger — Code Generator</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0F0617; color: #F8FAFC; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    background: #180F24; border: 1px solid #38254A;
+    border-radius: 20px; padding: 28px;
+    width: 100%; max-width: 420px;
+  }
+  h1 { font-size: 22px; font-weight: 800; margin-bottom: 4px; }
+  h1 .accent { color: #FF1493; }
+  p.sub { font-size: 13px; color: #94A3B8; margin-bottom: 24px; }
+  label { display: block; font-size: 12px; color: #94A3B8; margin-bottom: 6px; margin-top: 14px; }
+  input {
+    width: 100%; padding: 12px 14px; background: #0F0617;
+    border: 1px solid #38254A; border-radius: 10px;
+    color: #F8FAFC; font-size: 14px; outline: none;
+  }
+  input:focus { border-color: #FF1493; }
+  button {
+    width: 100%; padding: 14px; background: #FF1493; color: white;
+    border: none; border-radius: 12px; font-size: 14px; font-weight: 700;
+    cursor: pointer; margin-top: 20px; transition: opacity 0.2s;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary {
+    background: transparent; border: 1px solid #38254A;
+    color: #94A3B8; margin-top: 10px;
+  }
+  .code-box {
+    background: #0F0617; border: 2px solid #FF1493;
+    border-radius: 14px; padding: 24px;
+    text-align: center; margin-top: 20px;
+  }
+  .code {
+    font-size: 28px; font-weight: 800; letter-spacing: 4px;
+    color: #FF1493; font-family: "SF Mono", Menlo, monospace;
+    word-break: break-all;
+  }
+  .countdown { font-size: 13px; color: #94A3B8; margin-top: 12px; }
+  .countdown strong { color: #F8FAFC; }
+  .error {
+    background: #E11D48; color: white; padding: 12px;
+    border-radius: 10px; font-size: 13px;
+    margin-top: 16px; display: none;
+  }
+  .info { font-size: 11px; color: #94A3B8; margin-top: 20px; line-height: 1.5; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div id="loginView">
+    <h1><span class="accent">Pink</span>Ledger</h1>
+    <p class="sub">Admin — invite code generator</p>
+    <label>Admin email</label>
+    <input type="email" id="email" placeholder="you@yourdomain.com" autocomplete="username" />
+    <label>Password</label>
+    <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" />
+    <button id="loginBtn">Sign in</button>
+    <div class="error" id="loginError"></div>
+  </div>
+
+  <div id="generatorView" class="hidden">
+    <h1><span class="accent">Pink</span>Ledger</h1>
+    <p class="sub">Signed in as <span id="adminEmail"></span></p>
+    <button id="generateBtn">Generate code</button>
+    <button id="signOutBtn" class="secondary">Sign out</button>
+    <div class="error" id="genError"></div>
+    <div id="codeDisplay" class="hidden">
+      <div class="code-box">
+        <div class="code" id="codeText">—</div>
+        <div class="countdown" id="countdown"></div>
+      </div>
+      <div class="info">
+        Send this code to the client via WhatsApp. It expires in 10 minutes.
+        The client enters it once during signup.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  const firebaseConfig = {
+    apiKey: "AIzaSyBKFMUlU3lM1lxh4kfiQea1FD_foDuQOus",
+    authDomain: "pink-ledger-f9dad.firebaseapp.com",
+    projectId: "pink-ledger-f9dad",
+    storageBucket: "pink-ledger-f9dad.firebasestorage.app",
+    messagingSenderId: "635499948615",
+    appId: "1:635499948615:web:04571c14d44e5331f29f62",
+    measurementId: "G-3V9VLXKE1K"
+  };
+
+  const ADMIN_EMAIL = "ronnietreck@gmail.com";
+
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import {
+    getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import {
+    getFirestore, doc, setDoc, Timestamp
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  const loginView = document.getElementById("loginView");
+  const generatorView = document.getElementById("generatorView");
+  const emailInput = document.getElementById("email");
+  const passwordInput = document.getElementById("password");
+  const loginBtn = document.getElementById("loginBtn");
+  const loginError = document.getElementById("loginError");
+  const generateBtn = document.getElementById("generateBtn");
+  const signOutBtn = document.getElementById("signOutBtn");
+  const adminEmailSpan = document.getElementById("adminEmail");
+  const genError = document.getElementById("genError");
+  const codeDisplay = document.getElementById("codeDisplay");
+  const codeText = document.getElementById("codeText");
+  const countdown = document.getElementById("countdown");
+
+  let countdownInterval = null;
+  let currentExpiry = null;
+
+  function showError(el, msg) {
+    el.textContent = msg;
+    el.style.display = "block";
+  }
+
+  function hideError(el) {
+    el.style.display = "none";
+    el.textContent = "";
+  }
+
+  function generateCode() {
+    const charset = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+    let code = "";
+    for (let i = 0; i < 12; i++) {
+      if (i === 4 || i === 8) code += "-";
+      code += charset.charAt(Math.floor(Math.random() * charset.length));
+    }
+    return code;
+  }
+
+  onAuthStateChanged(auth, (user) => {
+    if (user && user.email === ADMIN_EMAIL) {
+      loginView.classList.add("hidden");
+      generatorView.classList.remove("hidden");
+      adminEmailSpan.textContent = user.email;
+    } else if (user) {
+      signOut(auth);
+      loginView.classList.remove("hidden");
+      generatorView.classList.add("hidden");
+      showError(loginError, "This account is not authorized.");
+    } else {
+      loginView.classList.remove("hidden");
+      generatorView.classList.add("hidden");
+    }
+  });
+
+  loginBtn.addEventListener("click", async () => {
+    hideError(loginError);
+    const email = emailInput.value.trim();
+    const password = passwordInput.value;
+    if (!email || !password) {
+      showError(loginError, "Enter email and password.");
+      return;
+    }
+    loginBtn.disabled = true;
+    loginBtn.textContent = "Signing in...";
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (e) {
+      showError(loginError, e.message || "Sign-in failed.");
+    } finally {
+      loginBtn.disabled = false;
+      loginBtn.textContent = "Sign in";
+    }
+  });
+
+  signOutBtn.addEventListener("click", () => {
+    if (countdownInterval) clearInterval(countdownInterval);
+    codeDisplay.classList.add("hidden");
+    signOut(auth);
+  });
+
+  generateBtn.addEventListener("click", async () => {
+    hideError(genError);
+    if (countdownInterval) clearInterval(countdownInterval);
+
+    const code = generateCode();
+    const now = Date.now();
+    const expiresAtMs = now + 10 * 60 * 1000;
+
+    generateBtn.disabled = true;
+    generateBtn.textContent = "Generating...";
+
+    try {
+      await setDoc(doc(db, "invite_codes", code), {
+        code: code,
+        active: true,
+        used: false,
+        createdAt: Timestamp.fromMillis(now),
+        expiresAt: Timestamp.fromMillis(expiresAtMs),
+        createdBy: auth.currentUser.uid
+      });
+      codeText.textContent = code;
+      codeDisplay.classList.remove("hidden");
+      startCountdown(expiresAtMs);
+    } catch (e) {
+      showError(genError, e.message || "Failed to create code.");
+    } finally {
+      generateBtn.disabled = false;
+      generateBtn.textContent = "Generate code";
+    }
+  });
+
+  function startCountdown(expiresAtMs) {
+    currentExpiry = expiresAtMs;
+    updateCountdown();
+    countdownInterval = setInterval(() => {
+      if (!updateCountdown()) clearInterval(countdownInterval);
+    }, 1000);
+  }
+
+  function updateCountdown() {
+    const ms = currentExpiry - Date.now();
+    if (ms <= 0) {
+      countdown.innerHTML = "<strong>Expired</strong>";
+      codeText.style.opacity = "0.3";
+      return false;
+    }
+    const mins = Math.floor(ms / 60000);
+    const secs = Math.floor((ms % 60000) / 1000);
+    countdown.innerHTML = `Valid for <strong>${mins}:${String(secs).padStart(2, "0")}</strong>`;
+    return true;
+  }
+</script>
+
+</body>
+  </html>
